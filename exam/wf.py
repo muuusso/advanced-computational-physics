@@ -6,8 +6,6 @@ from numba import njit
 import numpy as np
 from scipy.optimize import curve_fit
 
-from interpolation.splines import UCGrid, filter_cubic, eval_cubic
-
 from scipy.constants import hbar, physical_constants
 from scipy.constants import k as kB # Boltzmann constant
 
@@ -40,38 +38,38 @@ def numerovR(u, V, E, dr):
     return u
 
 
-# build wf with the rigt 2-body factor with healing distance L/2
-def build_psi(L):
+def build_fn(L):
+
     # build grid for Numerov's method
     dr = 1e-4
     Rmin = 0.35
-    Rmax = L/2
+    Rmax = L/2 - 10*dr
     
     n = int((Rmax - Rmin) / dr + 1)
     rgrid = np.linspace(Rmin, Rmax, n)
     
-    i = 0 # E_jl index
-    En = np.zeros(4)
+    i = 0 # En index
+    En = np.zeros(5)
     
     V = V_lj(rgrid)
     
     guess0 = numerovR(rgrid, V, -1, dr)[0]
     guessE = -1
-    
+        
     # found bound states for E in [-1, 3] epsilon with Numerov's method
-    for E in np.linspace(-1, 3, 401)[1:]:
+    for E in np.linspace(-1, 20, 2101)[1:]:
         u = numerovR(rgrid, V, E, dr)
         # find candidates for starting secant method
         if u[0] * guess0 < 0:
-    
+        
             # secant method
             u1, u0 = u[0], float(guess0)
             E1, E0 = float(E), float(guessE)
-    
-            while E1 - E0 > 1e-6:
+        
+            while E1 - E0 > 1e-9:
                 # updating formula
                 E2 = E1 - u1 * (E1 - E0) / (u1 - u0)
-    
+        
                 u2 = numerovR(rgrid, V, E2, dr)
                 if u2[0] * u1 < 0:
                     E0 = float(E2)
@@ -79,89 +77,31 @@ def build_psi(L):
                 else:
                     E1 = float(E2)
                     u1 = u2[0]
-    
+        
             # add energy values and update indexes
             E2 = (E1 - E0) / 2 + E0
             En[i] = E2
-    
+        
             i += 1
-    
+            if i == 5: break
+        
         guess0 = u[0]
         guessE = E
     
-    # extended grid to 0
-    n_ext = int(3.5 / dr)
-    ext_rgrid = np.arange(1, n_ext+1) * dr
-    
-    f_sol = np.zeros((4, n_ext))
-    
-    # due to instablity in Numerov's method near 0
-    # the function are fitted with a McMillan function
-    # between the nearest zero "stable" point and 1 
-    mcMillan_fit = lambda r, a, b: a*np.exp(-(b / r)**5)
-    
-    # grid for spline cubic interpolation
-    spgrid = UCGrid((dr, (n_ext+1)*dr, n_ext))
-
-    f_n = {}
-    for i in range(4):
+    fn = np.zeros((5, n))
+    nR = 0
+    for i in range(5):
         R = numerovR(rgrid, V_lj(rgrid), En[i], dr) / rgrid
-        
+
         # find nearest zero "stable" point
-        nR = np.argmin(np.abs(R)[:int(1 / dr)])
+        nR = max(nR, np.argmin(np.abs(R)[:int(1 / dr)]))
         
-        popt, pcov = curve_fit(mcMillan_fit, rgrid[nR:int(1/dr)], R[nR:int(1/dr)])
+        fn[i] = np.copy(R)
         
-        f_sol[i, -n + nR:] = R[nR:]
-        f_sol[i, :-n + nR] = mcMillan_fit(ext_rgrid[:-n + nR],  *popt)
-        
-        # defining fn(r): every function is a cubic spline
-        C = filter_cubic(spgrid, f_sol[i][:, None])
-        
-        f_n[i] = lambda r: eval_cubic(spgrid, C, np.expand_dims(r, 1)).flatten()
-        f_n[i] = njit(f_n[i]) # jit function
-        f_n[i](rgrid) # run function to compile it with the right C
+    rgrid = rgrid[nR:]
+    fn = fn[:, nR:]
 
-    f0 = f_n[0]
-    f1 = f_n[1]
-    f2 = f_n[2]
-    f3 = f_n[3]
-
-
-    @njit # 2-body correlation factor
-    def f(r_ij, cn):
-        r_ij = np.tril(r_ij).flatten() # take lower triangle of matrix
-        r_ij = r_ij[(r_ij < L/2) & (r_ij > 0)] # cutoff at L/2
-        f_ij = cn[0]*f0(r_ij) + cn[1]*f1(r_ij) + cn[2]*f2(r_ij) + cn[3]*f3(r_ij)
-        return np.prod(f_ij)
+    rgrid = np.append(rgrid, np.arange(1, 12)*dr + rgrid[-1])
+    fn = np.concatenate((fn, np.ones((5, 11))), axis=1)
     
-    
-    @njit # 3-body correlation factor
-    def h(R_ij, r_ij, Lambda, w, r0):
-        # sum on three-body terms
-        h_ijk = 0
-
-        # cutoff at L/2
-        r_ij = np.fmin(r_ij, L/2) 
-        # xi on pairwise distance matrix
-        xi_ij = np.exp(-(r_ij-r0)**2 / w**2) * ((2*r_ij-L) / L)**3
-    
-        # computing ij ik terms for every i 
-        for i in range(R_ij.shape[0]):
-            h_ijk += xi_ij[i].dot(R_ij[i]).dot(R_ij[i].T.dot(xi_ij[i])) 
-    
-        return np.exp(- Lambda / 2 * h_ijk)
-    
-    
-    @njit
-    def psi(conf, cn, Lambda, w, r0):
-        # pairwise vector distance matrix
-        R_ij = conf - np.expand_dims(conf, axis=1)
-        R_ij = R_ij - L * np.rint(R_ij / L)
-    
-        # pairwise distance matrix 
-        r_ij = np.sqrt(np.sum(R_ij**2, axis=2))
-
-        return f(r_ij, cn) * h(R_ij, r_ij, Lambda, w, r0)
-
-    return psi, f, h, f0, f1, f2, f3
+    return fn, rgrid
