@@ -45,11 +45,11 @@ def build_fn(L):
     Rmin = 0.35
     Rmax = L/2 - 10*dr
     
-    n = int((Rmax - Rmin) / dr + 1)
-    rgrid = np.linspace(Rmin, Rmax, n)
-    
+    n = int((Rmax - Rmin) / dr)
+    rgrid = np.arange(n) * dr + Rmin
+
     i = 0 # En index
-    En = np.zeros(5)
+    En = np.zeros(7)
     
     V = V_lj(rgrid)
     
@@ -83,14 +83,14 @@ def build_fn(L):
             En[i] = E2
         
             i += 1
-            if i == 5: break
+            if i == 7: break
         
         guess0 = u[0]
         guessE = E
     
-    fn = np.zeros((5, n))
+    fn = np.zeros((7, n))
     nR = 0
-    for i in range(5):
+    for i in range(7):
         R = numerovR(rgrid, V_lj(rgrid), En[i], dr) / rgrid
 
         # find nearest zero "stable" point
@@ -102,6 +102,6 @@ def build_fn(L):
     fn = fn[:, nR:]
 
     rgrid = np.append(rgrid, np.arange(1, 12)*dr + rgrid[-1])
-    fn = np.concatenate((fn, np.ones((5, 11))), axis=1)
+    fn = np.concatenate((fn, np.ones((7, 11))), axis=1)
     
     return fn, rgrid
