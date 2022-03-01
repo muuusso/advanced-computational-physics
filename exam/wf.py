@@ -38,26 +38,27 @@ def numerovR(u, V, E, dr):
     return u
 
 
-def build_fn(L):
+def build_fn(L, n):
 
     # build grid for Numerov's method
     dr = 1e-4
     Rmin = 0.35
-    Rmax = L/2 - 10*dr
+    Rmax = L/2
     
-    n = int((Rmax - Rmin) / dr)
-    rgrid = np.arange(n) * dr + Rmin
+    n_grid = int((Rmax - Rmin) / dr)
+    rgrid = np.arange(n_grid) * dr + Rmin
 
     i = 0 # En index
-    En = np.zeros(7)
+    En = np.zeros(n)
     
     V = V_lj(rgrid)
-    
+
     guess0 = numerovR(rgrid, V, -1, dr)[0]
     guessE = -1
         
-    # found bound states for E in [-1, 3] epsilon with Numerov's method
-    for E in np.linspace(-1, 20, 2101)[1:]:
+    # found n bound states with Numerov's method
+    E = -1 + 0.01
+    while En[n-1] == 0:
         u = numerovR(rgrid, V, E, dr)
         # find candidates for starting secant method
         if u[0] * guess0 < 0:
@@ -83,14 +84,14 @@ def build_fn(L):
             En[i] = E2
         
             i += 1
-            if i == 7: break
         
         guess0 = u[0]
         guessE = E
+        E += 0.01
     
-    fn = np.zeros((7, n))
+    fn = np.zeros((n, n_grid))
     nR = 0
-    for i in range(7):
+    for i in range(n):
         R = numerovR(rgrid, V_lj(rgrid), En[i], dr) / rgrid
 
         # find nearest zero "stable" point
@@ -101,7 +102,4 @@ def build_fn(L):
     rgrid = rgrid[nR:]
     fn = fn[:, nR:]
 
-    rgrid = np.append(rgrid, np.arange(1, 12)*dr + rgrid[-1])
-    fn = np.concatenate((fn, np.ones((7, 11))), axis=1)
-    
     return fn, rgrid
